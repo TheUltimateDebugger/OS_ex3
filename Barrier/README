@@ -1,0 +1,8 @@
+HUJI 67808 - Operating Systems - Ex3 - Multiple use Barrier demo
+
+MultiBarrier.cpp & MultipleBarrier.h contain a class providing a multiple use
+barrier
+
+barrierdemo.cpp contains a demo using this class.
+
+Makefile builds the demo

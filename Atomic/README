@@ -1,0 +1,7 @@
+HUJI 67808 - Operating Systems - Ex3 - Atomic variable demo
+
+attomicdemo.cpp contains a demo using an atomic variable.
+attomicdemo_mutlivar.cpp demos how to work with multiple flags in a single (32
+bit) atomic variable.
+
+Makefile builds the both demos
