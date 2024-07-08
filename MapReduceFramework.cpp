@@ -59,7 +59,7 @@ void emit3(K3* key, V3* value, void* context) {
 }
 
 void* Boss_thread(void* arg){
-    ThreadContext* tc = (ThreadContext*) context;
+    ThreadContext* tc = (ThreadContext*) arg;
     tc->job_state->stage = SHUFFLE_STAGE;
     tc->job_state->percentage = 0;
     //make everyone start at the same time
@@ -70,8 +70,8 @@ void* Boss_thread(void* arg){
         if (old_value >= tc->input_vec.size())
             break;
 
-        MapReduceClient::map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, context);
+        tc->client.map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, arg);
     }
     //waits for everyone to finish reading before updating the job state
     tc->barrier->barrier();
@@ -89,27 +89,13 @@ void* Boss_thread(void* arg){
     tc->job_state->percentage = 0;
     //release minions from shuffle stage
     tc->barrier->barrier();
-    while(true)
-    {
-      int old_value = (*(tc->atomic_index))++;
-      if (old_value >= tc->input_vec.size())
-        break;
-
-      std::sort(intermidiate_vector)
-      //we continue to shuffle only after everyone sorted their data
-      tc->barrier->barrier();
-
-
-      MapReduceClient::reduce(tc->[old_value].first,
-                           tc->input_vec[old_value].second, context);
-    }
 
     return NULL;
 }
 
 void* Minion_thread(void* arg)
 {
-    ThreadContext* tc = (ThreadContext*) context;
+    ThreadContext* tc = (ThreadContext*) arg;
     //waits for everyone to start at the same time
     tc->barrier->barrier();
     while(true)
@@ -118,8 +104,8 @@ void* Minion_thread(void* arg)
         if (old_value >= tc->input_vec.size())
             break;
 
-        MapReduceClient::map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, context);
+        tc->client.map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, arg);
     }
     //waits for everyone to finish mapping
     tc->barrier->barrier();
@@ -130,21 +116,6 @@ void* Minion_thread(void* arg)
     tc->barrier->barrier();
     //wait for boss to finish shuffling
     tc->barrier->barrier();
-
-    while(true)
-    {
-        int old_value = (*(tc->atomic_index))++;
-        if (old_value >= tc->input_vec.size())
-            break;
-
-        std::sort(intermidiate_vector)
-        //we continue to shuffle only after everyone sorted their data
-        tc->barrier->barrier();
-
-
-        MapReduceClient::reduce(tc->input_vec[old_value].first,
-                          tc->input_vec[old_value].second, context);
-    }
 
     return NULL;
 }
@@ -192,7 +163,7 @@ void waitForJob(JobHandle job){
 
 void getJobState(JobHandle job, JobState* state)
 {
-    JobContext* jc = (JobContext*) context;
+    JobContext* jc = (JobContext*) job;
     *state = *(jc->job_state);
 }
 
