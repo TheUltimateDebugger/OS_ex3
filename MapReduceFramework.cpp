@@ -6,23 +6,24 @@
 #include <semaphore.h>
 
 
-struct ThreadContext
-{
-    JobState *job_state;
-    const MapReduceClient &client;
-    std::atomic<int> *atomic_index;
-    std::atomic<int> *atomic_progress;
+struct ThreadContext {
+    JobState* job_state;
+    int thread_index;
+    pthread_mutex_t &grade_lock;
+    const MapReduceClient& client;
+    std::atomic<int>* atomic_index;
     pthread_t thread_id;
-    const InputVec &input_vec;
-    IntermediateVec intermediate_vector;
-    OutputVec &output_vec;
-    Barrier *barrier;
-
-    ThreadContext(const MapReduceClient &client, std::atomic<int> *index, std::atomic<int> *progress,
-                  const InputVec &inputVec, OutputVec &outputVec, JobState *job_state1, Barrier *barrier)
-            : job_state(job_state1), client(client), atomic_index(index), atomic_progress(progress),
-              input_vec(inputVec), output_vec(outputVec), barrier(barrier)
-    {}
+    const InputVec& input_vec;
+    std::vector<IntermediateVec> intermediate_super_vector;
+    OutputVec& output_vec;
+    Barrier* barrier;
+    ThreadContext(const MapReduceClient& client, std::atomic<int>* index,
+                  const InputVec& inputVec, OutputVec& outputVec, JobState*
+    job_state1, Barrier*
+    barrier_1, int i, pthread_mutex_t &lock)
+            : job_state(job_state1), client(client), atomic_index(index),
+              input_vec(inputVec), output_vec
+                      (outputVec), barrier(barrier_1), thread_index(i), grade_lock(lock) {}
 };
 
 struct JobContext
@@ -58,45 +59,43 @@ struct JobContext
     }
 };
 
-void emit2(K2 *key, V2 *value, void *context)
-{
-    ThreadContext *tc = (ThreadContext *) context;
-    tc->intermediate_vector.push_back(IntermediatePair(key, value));
-    (*(tc->atomic_progress))++;
+void emit2(K2* key, V2* value, void* context) {
+    ThreadContext* tc = (ThreadContext*)context;
+    tc->intermediate_vector[tc->thread_index].push_back(IntermediatePair(key, value));
 }
 
-void emit3(K3 *key, V3 *value, void *context)
-{
-    ThreadContext *tc = (ThreadContext *) context;
+void emit3(K3* key, V3* value, void* context) {
+    ThreadContext* tc = (ThreadContext*)context;
     tc->output_vec.emplace_back(key, value);
-    (*(tc->atomic_progress))++;
 }
 
-void *Boss_thread(void *arg)
-{
-    ThreadContext *tc = (ThreadContext *) arg;
+void* Boss_thread(void* arg){
+    ThreadContext* tc = (ThreadContext*) context;
     tc->job_state->stage = SHUFFLE_STAGE;
     tc->job_state->percentage = 0;
     //make everyone start at the same time
     tc->barrier->barrier();
-    while (true)
+    while(true)
     {
         int old_value = (*(tc->atomic_index))++;
         if (old_value >= tc->input_vec.size())
             break;
 
-        tc->client.map(tc->input_vec[old_value].first,
-                       tc->input_vec[old_value].second, arg);
+        MapReduceClient::map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, context);
+        //updates percentage, no one can touch it in this time
+        pthread_mutex_lock(tc->grade_lock);
+        grade = tc->atomic_index/tc->input_vec.size()*100;
+        pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish reading before updating the job state
     tc->barrier->barrier();
     tc->atomic_index = 0;
-    tc->atomic_progress = 0;
     tc->job_state->stage = SHUFFLE_STAGE;
     tc->job_state->percentage = 0;
     //start sorting
     tc->barrier->barrier();
-    //TODO: implement sorting
+    std::sort(tc->intermediate_super_vector[tc->thread_index]);
     //finish sorting
     tc->barrier->barrier();
     //TODO: implement shuffle
@@ -104,33 +103,40 @@ void *Boss_thread(void *arg)
     tc->job_state->percentage = 0;
     //release minions from shuffle stage
     tc->barrier->barrier();
+    //TODO: implement reduce
 
     return NULL;
 }
 
-void *Minion_thread(void *arg)
+void* Minion_thread(void* arg)
 {
-    ThreadContext *tc = (ThreadContext *) arg;
+    ThreadContext* tc = (ThreadContext*) context;
     //waits for everyone to start at the same time
     tc->barrier->barrier();
-    while (true)
+    while(true)
     {
         int old_value = (*(tc->atomic_index))++;
         if (old_value >= tc->input_vec.size())
             break;
 
-        tc->client.map(tc->input_vec[old_value].first,
-                       tc->input_vec[old_value].second, arg);
+        MapReduceClient::map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, context);
+      //updates percentage, no one can touch it in this time
+      pthread_mutex_lock(tc->grade_lock);
+      grade = tc->atomic_index/tc->input_vec.size()*100;
+      pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish mapping
     tc->barrier->barrier();
     //wait for boss to signal to start sorting
     tc->barrier->barrier();
-    //TODO: implement sorting
+    std::sort(tc->intermediate_super_vector[tc->thread_index]);
     //wait for everyone to finish sorting
     tc->barrier->barrier();
     //wait for boss to finish shuffling
     tc->barrier->barrier();
+    //TODO: implement reduce
+
 
     return NULL;
 }
@@ -139,21 +145,27 @@ JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &input
 {
     // Create atomic variables
     std::atomic<int> *atomic_index = new std::atomic<int>(0);
-    std::atomic<int> *atomic_progress = new std::atomic<int>(0);
 
     // Initialize job state
     JobState *job_state = new JobState;
     job_state->percentage = 0;
     job_state->stage = UNDEFINED_STAGE;
 
+    // Initialize barrier
+    Barrier* barrier = new Barrier(multiThreadLevel);
+
     // Create JobContext
     JobContext *job_context = new JobContext(inputVec, outputVec, job_state, multiThreadLevel);
+
+    // Initialize mutex
+    pthread_mutex_t grade_lock;
+    pthread_mutex_init(&grade_lock, NULL);
 
     // Create and start threads
     for (int i = 0; i < multiThreadLevel; ++i)
     {
-        ThreadContext *thread_context = new ThreadContext(client, atomic_index, atomic_progress, inputVec, outputVec,
-                                                          job_state, job_context->barrier);
+        ThreadContext *thread_context = new ThreadContext(client, atomic_index, inputVec, outputVec,
+                                                          job_state, barrier, i, grade_lock);
         job_context->thread_contexts.push_back(thread_context);
         if (i == 0)
         {
