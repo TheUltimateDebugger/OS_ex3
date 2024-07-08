@@ -59,11 +59,93 @@ void emit3(K3* key, V3* value, void* context) {
 }
 
 void* Boss_thread(void* arg){
+    ThreadContext* tc = (ThreadContext*) context;
+    tc->job_state->stage = SHUFFLE_STAGE;
+    tc->job_state->percentage = 0;
+    //make everyone start at the same time
+    tc->barrier->barrier();
+    while(true)
+    {
+        int old_value = (*(tc->atomic_index))++;
+        if (old_value >= tc->input_vec.size())
+            break;
+
+        MapReduceClient::map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, context);
+    }
+    //waits for everyone to finish reading before updating the job state
+    tc->barrier->barrier();
+    tc->atomic_index = 0;
+    tc->atomic_progress = 0;
+    tc->job_state->stage = SHUFFLE_STAGE;
+    tc->job_state->percentage = 0;
+    //start sorting
+    tc->barrier->barrier();
+    //TODO: implement sorting
+    //finish sorting
+    tc->barrier->barrier();
+    //TODO: implement shuffle
+    tc->job_state->stage = REDUCE_STAGE;
+    tc->job_state->percentage = 0;
+    //release minions from shuffle stage
+    tc->barrier->barrier();
+    while(true)
+    {
+      int old_value = (*(tc->atomic_index))++;
+      if (old_value >= tc->input_vec.size())
+        break;
+
+      std::sort(intermidiate_vector)
+      //we continue to shuffle only after everyone sorted their data
+      tc->barrier->barrier();
+
+
+      MapReduceClient::(tc->input_vec[old_value].first,
+                           tc->input_vec[old_value].second, context);
+    }
+
     return NULL;
 }
 
 void* Minion_thread(void* arg)
 {
+    ThreadContext* tc = (ThreadContext*) context;
+    //waits for everyone to start at the same time
+    tc->barrier->barrier();
+    while(true)
+    {
+        int old_value = (*(tc->atomic_index))++;
+        if (old_value >= tc->input_vec.size())
+            break;
+
+        MapReduceClient::map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, context);
+    }
+    //waits for everyone to finish mapping
+    tc->barrier->barrier();
+    //wait for boss to signal to start sorting
+    tc->barrier->barrier();
+    //TODO: implement sorting
+    //wait for everyone to finish sorting
+    tc->barrier->barrier();
+    //wait for boss to finish shuffling
+    tc->barrier->barrier();
+
+    while(true)
+    {
+        int old_value = (*(tc->atomic_index))++;
+        if (old_value >= tc->input_vec.size())
+            break;
+
+        std::sort(intermidiate_vector)
+        //we continue to shuffle only after everyone sorted their data
+        tc->barrier->barrier();
+
+
+        MapReduceClient::(tc->input_vec[old_value].first,
+                          tc->input_vec[old_value].second, context);
+    }
+
     return NULL;
 }
 
