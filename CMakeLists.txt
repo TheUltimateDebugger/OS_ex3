@@ -8,7 +8,7 @@ include_directories(${CMAKE_SOURCE_DIR})
 
 # Specify the source files for the Barrier
 set(BARRIER_SOURCES
-        Barrier.cpp
+        Barrier/Barrier.cpp
         )
 
 # Specify the source files for the MapReduceFramework
@@ -25,7 +25,7 @@ target_link_libraries(MapReduceFramework Barrier)
 
 # Specify the source files for the SampleClient executable
 set(SAMPLE_CLIENT_SOURCES
-        "Sample Client/SampleClient.cpp"
+        SampleClient/SampleClient.cpp
         )
 
 # Create the SampleClient executable and link MapReduceFramework
