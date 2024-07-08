@@ -1,18 +1,33 @@
-cmake_minimum_required(VERSION 3.22)
-project(OS_ex3)
+cmake_minimum_required(VERSION 3.10)
+project(ex3)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 11)
 
-include_directories(.)
-include_directories(Barrier)
+# Include directories
+include_directories(${CMAKE_SOURCE_DIR})
 
-add_executable(OS_ex3
-        Atomic/atomicdemo.cpp
-        Atomic/atomicdemo_multivar.cpp
+# Specify the source files for the Barrier
+set(BARRIER_SOURCES
         Barrier.cpp
-        Barrier.h
-        Barrier/barrierdemo.cpp
-        "Sample Client/SampleClient.cpp"
-        MapReduceClient.h
+        )
+
+# Specify the source files for the MapReduceFramework
+set(MAPREDUCE_SOURCES
         MapReduceFramework.cpp
-        MapReduceFramework.h)
+        )
+
+# Create the Barrier static library
+add_library(Barrier STATIC ${BARRIER_SOURCES})
+
+# Create the MapReduceFramework static library and link Barrier
+add_library(MapReduceFramework STATIC ${MAPREDUCE_SOURCES})
+target_link_libraries(MapReduceFramework Barrier)
+
+# Specify the source files for the SampleClient executable
+set(SAMPLE_CLIENT_SOURCES
+        "Sample Client/SampleClient.cpp"
+        )
+
+# Create the SampleClient executable and link MapReduceFramework
+add_executable(SampleClient ${SAMPLE_CLIENT_SOURCES})
+target_link_libraries(SampleClient MapReduceFramework)

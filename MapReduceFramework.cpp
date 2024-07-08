@@ -5,6 +5,7 @@
 #include "pthread.h"
 #include <semaphore.h>
 #include <algorithm>
+#include <cstdio> // Include for printf
 
 struct JobContext;
 
@@ -13,7 +14,7 @@ struct ThreadContext {
     int thread_index;
     pthread_mutex_t *grade_lock;
     const MapReduceClient& client;
-    std::atomic<int>* atomic_index;
+    std::atomic<int>& atomic_index;
     pthread_t thread_id;
     const InputVec& input_vec;
     std::vector<IntermediateVec> &intermediate_super_vector;
@@ -21,12 +22,12 @@ struct ThreadContext {
     OutputVec& output_vec;
     Barrier* barrier;
     JobContext* job_context;
-    ThreadContext(const MapReduceClient& client, std::atomic<int>* index, const InputVec& inputVec, OutputVec& outputVec,
+    ThreadContext(const MapReduceClient& client, std::atomic<int>& index, const InputVec& inputVec, OutputVec& outputVec,
                   JobState* job_state1, Barrier* barrier_1, int i, pthread_mutex_t *lock, std::vector<IntermediateVec> &
-                  inter_vector, std::vector<IntermediateVec> & shuffled_vector, JobContext* jc)
+    inter_vector, std::vector<IntermediateVec> & shuffled_vector, JobContext* jc)
             : job_state(job_state1), client(client), atomic_index(index), input_vec(inputVec), output_vec(outputVec),
-            barrier(barrier_1), thread_index(i), grade_lock(lock), intermediate_super_vector(inter_vector),
-            intermediate_shuffled_super_vector(shuffled_vector), job_context(jc) {}
+              barrier(barrier_1), thread_index(i), grade_lock(lock), intermediate_super_vector(inter_vector),
+              intermediate_shuffled_super_vector(shuffled_vector), job_context(jc) {}
 };
 
 struct JobContext
@@ -39,19 +40,17 @@ struct JobContext
     pthread_mutex_t job_mutex;
     pthread_cond_t job_cv;
     bool job_done;
+    std::atomic<int> atomic_index;
 
     JobContext(const InputVec &inputVec, OutputVec &outputVec, JobState *job_state1, int multiThreadLevel)
-            : job_state(job_state1), input_vec(inputVec), output_vec(outputVec), job_done(false)
-    {
+            : job_state(job_state1), input_vec(inputVec), output_vec(outputVec), job_done(false), atomic_index(0) {
         length = inputVec.size();
         pthread_mutex_init(&job_mutex, nullptr);
         pthread_cond_init(&job_cv, nullptr);
     }
 
-    ~JobContext()
-    {
-        for (auto &tc: thread_contexts)
-        {
+    ~JobContext() {
+        for (auto &tc: thread_contexts) {
             delete tc;
         }
         pthread_mutex_destroy(&job_mutex);
@@ -71,25 +70,28 @@ void emit3(K3* key, V3* value, void* context) {
 
 void* Boss_thread(void* arg){
     ThreadContext* tc = (ThreadContext*) arg;
+    printf("Boss thread started\n");
     tc->job_state->stage = SHUFFLE_STAGE;
     tc->job_state->percentage = 0;
     //make everyone start at the same time
     tc->barrier->barrier();
     while(true)
     {
-        int old_value = (*(tc->atomic_index))++;
+        int old_value = tc->atomic_index++;
+        printf("old value is %d\n", old_value);
         if (old_value >= tc->input_vec.size())
             break;
 
         tc->client.map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, arg);
+                       tc->input_vec[old_value].second, arg);
         //updates percentage, no one can touch it in this time
         pthread_mutex_lock(tc->grade_lock);
         tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size())
-            * 100;
+                                    * 100;
         pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish reading before updating the job state
+    printf("Waiting for finish mapping");
     tc->barrier->barrier();
     tc->atomic_index = 0;
     tc->job_state->stage = SHUFFLE_STAGE;
@@ -129,18 +131,18 @@ void* Boss_thread(void* arg){
                     if (smallest_pair_transfered == nullptr || *last_pair.first < *smallest_pair_transfered)
                     {
                         tc->intermediate_shuffled_super_vector.push_back
-                            ({last_pair});
+                                ({last_pair});
                         smallest_pair_transfered = last_pair.first;
                     }
                     else
                     {
                         tc->intermediate_shuffled_super_vector[tc
-                        ->intermediate_shuffled_super_vector.size()-1]
-                        .push_back (last_pair);
+                                                                       ->intermediate_shuffled_super_vector.size()-1]
+                                .push_back (last_pair);
                     }
                     counter++;
                     tc->job_state->percentage = counter/tc->input_vec.size()
-                        *100;
+                                                *100;
                 }
             }
         }
@@ -152,42 +154,46 @@ void* Boss_thread(void* arg){
     tc->barrier->barrier();
     while(true)
     {
-      int old_value = (*(tc->atomic_index))++;
-      if (old_value >= tc->input_vec.size())
-          break;
+        int old_value = tc->atomic_index++;
+        if (old_value >= tc->input_vec.size())
+            break;
 
-      tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
-      //updates percentage, no one can touch it in this time
-      pthread_mutex_lock(tc->grade_lock);
-      tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size()) *
-          100;
-      pthread_mutex_unlock(tc->grade_lock);
+        tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
+        //updates percentage, no one can touch it in this time
+        pthread_mutex_lock(tc->grade_lock);
+        tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size()) *
+                                    100;
+        pthread_mutex_unlock(tc->grade_lock);
     }
 
     //TODO:implement delete
+    printf("Boss thread finished\n");
     return nullptr;
 }
 
 void* Minion_thread(void* arg)
 {
     ThreadContext* tc = (ThreadContext*) arg;
+    printf("Minion thread %d started\n", tc->thread_index);
     //waits for everyone to start at the same time
     tc->barrier->barrier();
     while(true)
     {
-        int old_value = (*(tc->atomic_index))++;
+        int old_value = tc->atomic_index++;
+        printf("old value is %d\n", old_value);
         if (old_value >= tc->input_vec.size())
             break;
 
         tc->client.map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, arg);
-      //updates percentage, no one can touch it in this time
+                       tc->input_vec[old_value].second, arg);
+        //updates percentage, no one can touch it in this time
         pthread_mutex_lock(tc->grade_lock);
         tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size())
-            * 100;
+                                    * 100;
         pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish mapping
+    printf("Waiting for finish mapping");
     tc->barrier->barrier();
     //wait for boss to signal to start sorting
     tc->barrier->barrier();
@@ -198,17 +204,18 @@ void* Minion_thread(void* arg)
     tc->barrier->barrier();
     while(true)
     {
-    int old_value = (*(tc->atomic_index))++;
-    if (old_value >= tc->input_vec.size())
-      break;
+        int old_value = tc->atomic_index++;
+        if (old_value >= tc->input_vec.size())
+            break;
 
-    tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
-    //updates percentage, no one can touch it in this time
-    pthread_mutex_lock(tc->grade_lock);
-    tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size()) *
-                                100;
-    pthread_mutex_unlock(tc->grade_lock);
+        tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
+        //updates percentage, no one can touch it in this time
+        pthread_mutex_lock(tc->grade_lock);
+        tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size()) *
+                                    100;
+        pthread_mutex_unlock(tc->grade_lock);
     }
+    printf("Minion thread %d finished\n", tc->thread_index);
     return nullptr;
 }
 
@@ -240,7 +247,7 @@ JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &input
     // Create and start threads
     for (int i = 0; i < multiThreadLevel; ++i)
     {
-        ThreadContext *thread_context = new ThreadContext(client, atomic_index, inputVec, outputVec, job_state, barrier,
+        ThreadContext *thread_context = new ThreadContext(client, job_context->atomic_index, inputVec, outputVec, job_state, barrier,
                                                           i, grade_lock, *inter_vec, *shuffle_vec, job_context);
         job_context->thread_contexts.push_back(thread_context);
         if (i == 0)
@@ -291,14 +298,13 @@ void MemoryFree(JobContext* jc)
     for (auto &tc : jc->thread_contexts)
     {
         // Free intermediate and shuffled vectors
-        delete &tc->barrier;
+//        delete &tc->barrier;
         delete &tc->job_state;
 
 
         // Free thread context itself
         delete tc;
     }
-    delete jc;
 }
 
 void closeJobHandle(JobHandle job)
@@ -317,13 +323,16 @@ void closeJobHandle(JobHandle job)
     pthread_mutex_unlock(&job_context->job_mutex);
 
     // Join all threads to ensure they are done
-    for (auto &tc: job_context->thread_contexts)
+    for (auto &tc : job_context->thread_contexts)
     {
         pthread_join(tc->thread_id, nullptr);
     }
 
     // Clean up resources
     delete job_context->job_state;
+
+    // Call MemoryFree to clean up thread contexts and their resources
+    MemoryFree(job_context);
 
     // The destructor of JobContext will clean up thread contexts and destroy the mutex and condition variable
     delete job_context;
