@@ -2,14 +2,15 @@
 #include "MapReduceClient.h"
 #include "Barrier.h"
 #include <atomic>
-#include <pthread.h>
+#include "pthread.h"
 #include <semaphore.h>
+#include <algorithm>
 
 
 struct ThreadContext {
     JobState* job_state;
     int thread_index;
-    pthread_mutex_t &grade_lock;
+    pthread_mutex_t *grade_lock;
     const MapReduceClient& client;
     std::atomic<int>* atomic_index;
     pthread_t thread_id;
@@ -20,7 +21,7 @@ struct ThreadContext {
     ThreadContext(const MapReduceClient& client, std::atomic<int>* index,
                   const InputVec& inputVec, OutputVec& outputVec, JobState*
     job_state1, Barrier*
-    barrier_1, int i, pthread_mutex_t &lock)
+    barrier_1, int i, pthread_mutex_t *lock)
             : job_state(job_state1), client(client), atomic_index(index),
               input_vec(inputVec), output_vec
                       (outputVec), barrier(barrier_1), thread_index(i), grade_lock(lock) {}
@@ -61,7 +62,7 @@ struct JobContext
 
 void emit2(K2* key, V2* value, void* context) {
     ThreadContext* tc = (ThreadContext*)context;
-    tc->intermediate_vector[tc->thread_index].push_back(IntermediatePair(key, value));
+    tc->intermediate_super_vector[tc->thread_index].push_back(IntermediatePair(key, value));
 }
 
 void emit3(K3* key, V3* value, void* context) {
@@ -70,7 +71,7 @@ void emit3(K3* key, V3* value, void* context) {
 }
 
 void* Boss_thread(void* arg){
-    ThreadContext* tc = (ThreadContext*) context;
+    ThreadContext* tc = (ThreadContext*) arg;
     tc->job_state->stage = SHUFFLE_STAGE;
     tc->job_state->percentage = 0;
     //make everyone start at the same time
@@ -81,11 +82,12 @@ void* Boss_thread(void* arg){
         if (old_value >= tc->input_vec.size())
             break;
 
-        MapReduceClient::map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, context);
+        tc->client.map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, arg);
         //updates percentage, no one can touch it in this time
         pthread_mutex_lock(tc->grade_lock);
-        grade = tc->atomic_index/tc->input_vec.size()*100;
+        int value = tc->atomic_index->load();
+        tc->job_state->percentage = ((float)value / (float)tc->input_vec.size()) * 100;
         pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish reading before updating the job state
@@ -95,7 +97,7 @@ void* Boss_thread(void* arg){
     tc->job_state->percentage = 0;
     //start sorting
     tc->barrier->barrier();
-    std::sort(tc->intermediate_super_vector[tc->thread_index]);
+    std::sort(tc->intermediate_super_vector[tc->thread_index].begin(), tc->intermediate_super_vector[tc->thread_index].end());
     //finish sorting
     tc->barrier->barrier();
     //TODO: implement shuffle
@@ -110,7 +112,7 @@ void* Boss_thread(void* arg){
 
 void* Minion_thread(void* arg)
 {
-    ThreadContext* tc = (ThreadContext*) context;
+    ThreadContext* tc = (ThreadContext*) arg;
     //waits for everyone to start at the same time
     tc->barrier->barrier();
     while(true)
@@ -119,18 +121,19 @@ void* Minion_thread(void* arg)
         if (old_value >= tc->input_vec.size())
             break;
 
-        MapReduceClient::map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, context);
+        tc->client.map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, arg);
       //updates percentage, no one can touch it in this time
-      pthread_mutex_lock(tc->grade_lock);
-      grade = tc->atomic_index/tc->input_vec.size()*100;
-      pthread_mutex_unlock(tc->grade_lock);
+        pthread_mutex_lock(tc->grade_lock);
+        int value = tc->atomic_index->load();
+        tc->job_state->percentage = ((float)value / (float)tc->input_vec.size()) * 100;
+        pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish mapping
     tc->barrier->barrier();
     //wait for boss to signal to start sorting
     tc->barrier->barrier();
-    std::sort(tc->intermediate_super_vector[tc->thread_index]);
+    std::sort(tc->intermediate_super_vector[tc->thread_index].begin(), tc->intermediate_super_vector[tc->thread_index].end());
     //wait for everyone to finish sorting
     tc->barrier->barrier();
     //wait for boss to finish shuffling
@@ -158,8 +161,8 @@ JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &input
     JobContext *job_context = new JobContext(inputVec, outputVec, job_state, multiThreadLevel);
 
     // Initialize mutex
-    pthread_mutex_t grade_lock;
-    pthread_mutex_init(&grade_lock, NULL);
+    pthread_mutex_t* grade_lock = new pthread_mutex_t;
+    pthread_mutex_init(grade_lock, NULL);
 
     // Create and start threads
     for (int i = 0; i < multiThreadLevel; ++i)
