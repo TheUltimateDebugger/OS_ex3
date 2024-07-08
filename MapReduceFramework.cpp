@@ -15,7 +15,7 @@ struct ThreadContext {
     IntermediateVec intermediate_vector;
     OutputVec& output_vec;
 
-    ThreadContext(const MapReduceClient& client, std::atomic<int>* index, std::atomic<int>* progress, const InputVec& inputVec, OutputVec& outputVec)
+        ThreadContext(const MapReduceClient& client, std::atomic<int>* index, std::atomic<int>* progress, const InputVec& inputVec, OutputVec& outputVec)
             : client(client), atomic_index(index), atomic_progress(progress), input_vec(inputVec), output_vec(outputVec) {}
 };
 
@@ -57,7 +57,6 @@ void* Boss_thread(void* arg){
 
 void* Minion_thread(void* arg)
 {
-
     return NULL;
 }
 
