@@ -87,8 +87,8 @@ void* Boss_thread(void* arg){
                              tc->input_vec[old_value].second, arg);
         //updates percentage, no one can touch it in this time
         pthread_mutex_lock(tc->grade_lock);
-        int value = tc->atomic_index->load();
-        tc->job_state->percentage = ((float)value / (float)tc->input_vec.size()) * 100;
+        tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size())
+            * 100;
         pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish reading before updating the job state
@@ -148,14 +148,25 @@ void* Boss_thread(void* arg){
         }
 
     }
-    //TODO: implement shuffle
     tc->job_state->stage = REDUCE_STAGE;
     tc->job_state->percentage = 0;
     //release minions from shuffle stage
     tc->barrier->barrier();
-    //TODO: implement reduce
+    while(true)
+    {
+      int old_value = (*(tc->atomic_index))++;
+      if (old_value >= tc->input_vec.size())
+          break;
 
-    return NULL;
+      tc->client.reduce(tc->intermediate_shuffled_super_vector[old_value], arg);
+      //updates percentage, no one can touch it in this time
+      pthread_mutex_lock(tc->grade_lock);
+      tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size()) *
+          100;
+      pthread_mutex_unlock(tc->grade_lock);
+    }
+    //TODO:implement delete
+    return;
 }
 
 void* Minion_thread(void* arg)
@@ -173,8 +184,8 @@ void* Minion_thread(void* arg)
                              tc->input_vec[old_value].second, arg);
       //updates percentage, no one can touch it in this time
         pthread_mutex_lock(tc->grade_lock);
-        int value = tc->atomic_index->load();
-        tc->job_state->percentage = ((float)value / (float)tc->input_vec.size()) * 100;
+        tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size())
+            * 100;
         pthread_mutex_unlock(tc->grade_lock);
     }
     //waits for everyone to finish mapping
@@ -187,9 +198,21 @@ void* Minion_thread(void* arg)
     //wait for boss to finish shuffling
     tc->barrier->barrier();
     //TODO: implement reduce
+  while(true)
+  {
+    int old_value = (*(tc->atomic_index))++;
+    if (old_value >= tc->input_vec.size())
+      break;
 
+    tc->client.reduce(tc->intermediate_shuffled_super_vector[old_value], arg);
+    //updates percentage, no one can touch it in this time
+    pthread_mutex_lock(tc->grade_lock);
+    tc->job_state->percentage = ((float)old_value / (float)tc->input_vec.size()) *
+                                100;
+    pthread_mutex_unlock(tc->grade_lock);
+  }
 
-    return NULL;
+    return;
 }
 
 JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &inputVec, OutputVec &outputVec, int multiThreadLevel)
