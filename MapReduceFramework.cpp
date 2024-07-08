@@ -14,7 +14,7 @@ struct ThreadContext {
     const InputVec& input_vec;
     IntermediateVec intermediate_vector;
     OutputVec& output_vec;
-
+    Barrier* barrier;
     ThreadContext(const MapReduceClient& client, std::atomic<int>* index, std::atomic<int>* progress, const InputVec& inputVec, OutputVec& outputVec)
             : client(client), atomic_index(index), atomic_progress(progress), input_vec(inputVec), output_vec(outputVec) {}
 };
@@ -52,6 +52,19 @@ void emit3(K3* key, V3* value, void* context) {
 }
 
 void* Boss_thread(void* arg){
+    ThreadContext* tc = (ThreadContext*) context;
+    while(true)
+    {
+        int old_value = (*(tc->atomic_index))++;
+        if (old_value >= tc->input_vec.size())
+            break;
+
+        MapReduceClient::map(tc->input_vec[old_value].first,
+                             tc->input_vec[old_value].second, context);
+    }
+    // waits for everyone to finish reading before updating the job state
+    tc->barrier->barrier();
+
     return NULL;
 }
 
