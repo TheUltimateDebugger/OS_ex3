@@ -13,6 +13,7 @@ struct ThreadContext {
     JobState* job_state;
     int thread_index;
     pthread_mutex_t *grade_lock;
+    pthread_mutex_t *emit3_lock;
     const MapReduceClient& client;
     std::atomic<int>& atomic_index;
     pthread_t thread_id;
@@ -23,7 +24,9 @@ struct ThreadContext {
     Barrier* barrier;
     JobContext* job_context;
     ThreadContext(const MapReduceClient& client, std::atomic<int>& index, const InputVec& inputVec, OutputVec& outputVec,
-                  JobState* job_state1, Barrier* barrier_1, int i, pthread_mutex_t *lock, std::vector<IntermediateVec> &
+                  JobState* job_state1, Barrier* barrier_1, int i,
+                  pthread_mutex_t *lock, pthread_mutex_t *lock3,
+                  std::vector<IntermediateVec> &
     inter_vector, std::vector<IntermediateVec> & shuffled_vector, JobContext* jc)
             : job_state(job_state1), client(client), atomic_index(index), input_vec(inputVec), output_vec(outputVec),
               barrier(barrier_1), thread_index(i), grade_lock(lock), intermediate_super_vector(inter_vector),
@@ -65,7 +68,9 @@ void emit2(K2* key, V2* value, void* context) {
 
 void emit3(K3* key, V3* value, void* context) {
     ThreadContext* tc = (ThreadContext*)context;
+    pthread_mutex_lock(tc->emit3_lock);
     tc->output_vec.emplace_back(key, value);
+    pthread_mutex_unlock(tc->emit3_lock);
 }
 
 void* Boss_thread(void* arg){
@@ -236,6 +241,7 @@ JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &input
     JobContext *job_context = new JobContext(inputVec, outputVec, job_state, multiThreadLevel);
 
     // Initialize mutex
+    pthread_mutex_t* emit3_lock = new pthread_mutex_t;
     pthread_mutex_t* grade_lock = new pthread_mutex_t;
     pthread_mutex_init(grade_lock, NULL);
 
@@ -248,7 +254,9 @@ JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &input
     for (int i = 0; i < multiThreadLevel; ++i)
     {
         ThreadContext *thread_context = new ThreadContext(client, job_context->atomic_index, inputVec, outputVec, job_state, barrier,
-                                                          i, grade_lock, *inter_vec, *shuffle_vec, job_context);
+                                                          i, grade_lock,
+                                                          emit3_lock,
+                                                          *inter_vec, *shuffle_vec, job_context);
         job_context->thread_contexts.push_back(thread_context);
         if (i == 0)
         {
