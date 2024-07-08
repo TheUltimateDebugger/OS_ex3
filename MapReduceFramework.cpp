@@ -232,11 +232,14 @@ JobHandle startMapReduceJob(const MapReduceClient &client, const InputVec &input
     pthread_mutex_t* grade_lock = new pthread_mutex_t;
     pthread_mutex_init(grade_lock, NULL);
 
+
+
+    std::vector<IntermediateVec>* inter_vec = new std::vector<IntermediateVec>;
+    std::vector<IntermediateVec>* shuffle_vec = new std::vector<IntermediateVec>;
+
     // Create and start threads
     for (int i = 0; i < multiThreadLevel; ++i)
     {
-        std::vector<IntermediateVec>* inter_vec = new std::vector<IntermediateVec>;
-        std::vector<IntermediateVec>* shuffle_vec = new std::vector<IntermediateVec>;
         ThreadContext *thread_context = new ThreadContext(client, atomic_index, inputVec, outputVec, job_state, barrier,
                                                           i, grade_lock, *inter_vec, *shuffle_vec, job_context);
         job_context->thread_contexts.push_back(thread_context);
@@ -282,17 +285,20 @@ void getJobState(JobHandle job, JobState *state)
 void MemoryFree(JobContext* jc)
 {
     // Free memory allocated for thread contexts
+    delete &jc->thread_contexts[0]->intermediate_super_vector;
+    delete &jc->thread_contexts[0]->intermediate_shuffled_super_vector;
+
     for (auto &tc : jc->thread_contexts)
     {
         // Free intermediate and shuffled vectors
-        delete &tc->intermediate_super_vector;
-        delete &tc->intermediate_shuffled_super_vector;
         delete &tc->barrier;
-        delete &tc->
+        delete &tc->job_state;
+
 
         // Free thread context itself
         delete tc;
     }
+    delete jc;
 }
 
 void closeJobHandle(JobHandle job)
