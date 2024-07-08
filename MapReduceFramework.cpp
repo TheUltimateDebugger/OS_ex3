@@ -55,7 +55,9 @@ void* Boss_thread(void* arg){
     return NULL;
 }
 
-void* Minion_thread(void* arg){
+void* Minion_thread(void* arg)
+{
+
     return NULL;
 }
 
