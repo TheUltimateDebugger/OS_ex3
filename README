@@ -4,5 +4,7 @@ Ex: 3
 
 FILES:
 README -- this file
-memory_latency.cpp -- The source file for your implementation of the program described in Assignment 2.
-Makefile -- Makefile for Assignment 2. Running make with no arguments should generate the memory latency executable file.
+MapReduceFramework.cpp -- The source file for your implementation of the program described in Assignment 2.
+Barrier.cpp -- The implementation of the barrier that was implemented for us before hand.
+Barrier.h -- The header to the barrier implemented for us.
+Makefile -- Makefile for Assignment 3. Running make with no arguments should generate the memory latency executable file.
