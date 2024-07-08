@@ -1,0 +1,8 @@
+tomer_zilb, gambasho2
+Tomer Zilberman (326063047), Tomer Gambasho (325691863)
+Ex: 3
+
+FILES:
+README -- this file
+memory_latency.cpp -- The source file for your implementation of the program described in Assignment 2.
+Makefile -- Makefile for Assignment 2. Running make with no arguments should generate the memory latency executable file.
