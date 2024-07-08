@@ -12,7 +12,7 @@ TARGETS = $(EXEOBJ)
 
 TAR=tar
 TARFLAGS=-cvf
-TARNAME=ex2.tar
+TARNAME=ex3.tar
 TARSRCS= Makefile README MapReduceFramework.cpp
 
 all: $(TARGETS)

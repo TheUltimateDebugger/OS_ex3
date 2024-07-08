@@ -16,6 +16,7 @@ struct ThreadContext {
     pthread_t thread_id;
     const InputVec& input_vec;
     std::vector<IntermediateVec> intermediate_super_vector;
+    std::vector<IntermediateVec> intermediate_shuffled_super_vector;
     OutputVec& output_vec;
     Barrier* barrier;
     ThreadContext(const MapReduceClient& client, std::atomic<int>* index,
@@ -100,6 +101,53 @@ void* Boss_thread(void* arg){
     std::sort(tc->intermediate_super_vector[tc->thread_index].begin(), tc->intermediate_super_vector[tc->thread_index].end());
     //finish sorting
     tc->barrier->barrier();
+    int counter = 0;
+    while (counter < tc->input_vec.size())
+    {
+        K2* max_key = nullptr;
+        for (const auto& vec : tc->intermediate_super_vector)
+        {
+            if (!vec.empty())
+            {
+                const IntermediatePair& last_pair = vec.back();
+                K2* current_key = last_pair.first;
+
+                if (max_key == nullptr || (*current_key < *max_key))
+                {
+                    max_key = current_key;
+                }
+            }
+        }
+        if (max_key == nullptr)
+            break;
+        IntermediatePair smallest_pair_transfered = nullptr;
+        for (auto& vec : vectors)
+        {
+            if (!vec.empty())
+            {
+                IntermediatePair& last_pair = vec.back();
+                if (!(*current_key < *max_key && *max_key < *current_key))
+                {
+                    if (smallest_pair_transfered == nullptr ||
+                    smallest_pair_transfered > last_pair)
+                    {
+                        tc->intermediate_shuffled_super_vector.push_back
+                            ({last_pair});
+                    }
+                    else
+                    {
+                        tc->intermediate_shuffled_super_vector[tc
+                        ->intermediate_shuffled_super_vector.size()-1]
+                        .push_back (last_pair);
+                    }
+                    counter++;
+                    tc->job_state->percentage = counter/tc->input_vec.size()
+                        *100;
+                }
+            }
+        }
+
+    }
     //TODO: implement shuffle
     tc->job_state->stage = REDUCE_STAGE;
     tc->job_state->percentage = 0;
