@@ -5,7 +5,7 @@
 #include "pthread.h"
 #include <semaphore.h>
 #include <algorithm>
-#include <cstdio> // Include for printf
+#include <cstdio>
 #include <iostream>
 
 struct JobContext;
@@ -60,16 +60,6 @@ struct JobContext
       pthread_mutex_init(&job_mutex, nullptr);
       pthread_cond_init(&job_cv, nullptr);
     }
-
-    ~JobContext()
-    {
-      for (auto &tc: thread_contexts)
-      {
-        delete tc;
-      }
-      pthread_mutex_destroy(&job_mutex);
-      pthread_cond_destroy(&job_cv);
-    }
 };
 
 void MemoryFree(JobContext *jc);
@@ -84,18 +74,13 @@ void emit3(K3 *key, V3 *value, void *context)
 {
   ThreadContext *tc = (ThreadContext *) context;
   pthread_mutex_lock(tc->emit3_lock);
-  printf("inside emit3: %d\n", tc->thread_index);
-  fflush(stdout);
   tc->output_vec.emplace_back(key, value);
-  printf("exit emit3: %d\n", tc->thread_index);
-  fflush(stdout);
   pthread_mutex_unlock(tc->emit3_lock);
 }
 
 void *Boss_thread(void *arg)
 {
   ThreadContext *tc = (ThreadContext *) arg;
-  printf("Boss thread started\n");
   tc->job_state->stage = SHUFFLE_STAGE;
   tc->job_state->percentage = 0;
   //make everyone start at the same time
@@ -114,21 +99,17 @@ void *Boss_thread(void *arg)
     pthread_mutex_unlock(tc->grade_lock);
   }
   //waits for everyone to finish reading before updating the job state
-  printf("Waiting for finish mapping %f\n", tc->job_state->percentage);
-  fflush(stdout);
   tc->barrier->barrier();
   tc->atomic_index = 0;
   tc->atomic_index2 = 0;
-  tc->job_state->stage = SHUFFLE_STAGE;
-  tc->job_state->percentage = 0;
   //start sorting
   tc->barrier->barrier();
   std::sort(tc->intermediate_super_vector[tc->thread_index].begin(),
             tc->intermediate_super_vector[tc->thread_index].end());
-  printf("sorted like a boss\n");
-  fflush(stdout);
   //finish sorting
   tc->barrier->barrier();
+  tc->job_state->stage = SHUFFLE_STAGE;
+  tc->job_state->percentage = 0;
   int counter = 0;
   int size = 0;
   for (int i = 0; i < tc->intermediate_super_vector.size(); i++){
@@ -153,7 +134,7 @@ void *Boss_thread(void *arg)
     }
     if (max_key == nullptr)
       break;
-    K2 *previous_key = nullptr;
+    bool opend_for_max_key = false;
     for (auto &vec: tc->intermediate_super_vector)
     {
       if (!vec.empty())
@@ -161,17 +142,16 @@ void *Boss_thread(void *arg)
         IntermediatePair &last_pair = vec.back();
         if (!(*last_pair.first < *max_key || *max_key < *last_pair.first))
         {
-          if (previous_key == nullptr || *last_pair.first < *previous_key)
+          if (!opend_for_max_key)
           {
             tc->intermediate_shuffled_super_vector.push_back
                 ({last_pair});
-            previous_key = last_pair.first;
+            opend_for_max_key = true;
             vec.pop_back();
           } else
           {
             tc->intermediate_shuffled_super_vector[tc->intermediate_shuffled_super_vector.size() - 1]
                 .push_back(last_pair);
-            previous_key = last_pair.first;
             vec.pop_back();
           }
           counter++;
@@ -195,20 +175,18 @@ void *Boss_thread(void *arg)
     tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
     //updates percentage, no one can touch it in this time
     pthread_mutex_lock(tc->grade_lock);
-    tc->job_state->percentage = ((float) old_value / (float) size) *100;
+    tc->job_state->percentage = ((float) (old_value + 1)  / (float) size) *100;
     pthread_mutex_unlock(tc->grade_lock);
   }
 
-  printf("Boss thread finished\n");
   tc->barrier->barrier();
-  MemoryFree(tc->job_context);
+  tc->job_context->job_done = true;
   return nullptr;
 }
 
 void *Minion_thread(void *arg)
 {
   ThreadContext *tc = (ThreadContext *) arg;
-  printf("Minion thread %d started\n", tc->thread_index);
   //waits for everyone to start at the same time
   tc->barrier->barrier();
   while (true)
@@ -227,15 +205,14 @@ void *Minion_thread(void *arg)
     pthread_mutex_unlock(tc->grade_lock);
   }
   //waits for everyone to finish mapping
-  printf("Waiting for finish mapping %f\n", tc->job_state->percentage);
-  fflush(stdout);
   tc->barrier->barrier();
   //wait for boss to signal to start sorting
   tc->barrier->barrier();
   std::sort(tc->intermediate_super_vector[tc->thread_index].begin(),
-            tc->intermediate_super_vector[tc->thread_index].end());
-  printf("sorted like a minion\n");
-  fflush(stdout);
+            tc->intermediate_super_vector[tc->thread_index].end(),
+            [](const IntermediatePair& a, const IntermediatePair& b) {
+                return *(a.first) < *(b.first);
+            });
   //wait for everyone to finish sorting
   tc->barrier->barrier();
   //wait for boss to finish shuffling
@@ -252,10 +229,10 @@ void *Minion_thread(void *arg)
     tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
     //updates percentage, no one can touch it in this time
     pthread_mutex_lock(tc->grade_lock);
-    tc->job_state->percentage = ((float) old_value / (float) size) * 100;
+    tc->job_state->percentage = ((float) (old_value + 1) / (float) size) * 100;
     pthread_mutex_unlock(tc->grade_lock);
   }
-  printf("Minion thread %d finished\n", tc->thread_index);
+  tc->barrier->barrier();
   tc->barrier->barrier();
   return nullptr;
 }
@@ -355,17 +332,20 @@ void MemoryFree(JobContext *jc)
   // Free memory allocated for thread contexts
   delete &jc->thread_contexts[0]->intermediate_super_vector;
   delete &jc->thread_contexts[0]->intermediate_shuffled_super_vector;
+//    delete jc->thread_contexts[0]->job_state;
+//    delete jc->thread_contexts[0]->barrier; // Free the barrier
 
-  for (auto &tc: jc->thread_contexts)
+  for (auto &tc : jc->thread_contexts)
   {
-    // Free intermediate and shuffled vectors
-//        delete &tc->barrier;
-    delete &tc->job_state;
-
-
     // Free thread context itself
     delete tc;
   }
+
+  // Free the locks
+//    pthread_mutex_destroy(jc->thread_contexts[0]->grade_lock);
+//    pthread_mutex_destroy(jc->thread_contexts[0]->emit3_lock);
+//    delete jc->thread_contexts[0]->grade_lock;
+//    delete jc->thread_contexts[0]->emit3_lock;
 }
 
 void closeJobHandle(JobHandle job)
@@ -382,15 +362,6 @@ void closeJobHandle(JobHandle job)
   }
 
   pthread_mutex_unlock(&job_context->job_mutex);
-
-  // Join all threads to ensure they are done
-  for (auto &tc: job_context->thread_contexts)
-  {
-    pthread_join(tc->thread_id, nullptr);
-  }
-
-  // Clean up resources
-  delete job_context->job_state;
 
   // Call MemoryFree to clean up thread contexts and their resources
   MemoryFree(job_context);
