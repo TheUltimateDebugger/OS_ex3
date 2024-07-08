@@ -120,12 +120,20 @@ void *Boss_thread(void *arg)
   tc->barrier->barrier();
   std::sort(tc->intermediate_super_vector[tc->thread_index].begin(),
             tc->intermediate_super_vector[tc->thread_index].end());
-  printf("sorted like a minion\n");
+  printf("sorted like a boss\n");
   fflush(stdout);
   //finish sorting
   tc->barrier->barrier();
-  int counter = 0;
-  while (counter < tc->input_vec.size())
+  long counter = 0;
+
+  //count the number of elements
+  long total_amount = 0;
+  for (const auto &vec: tc->intermediate_super_vector)
+  {
+    total_amount += vec.size();
+  }
+
+  while (counter < total_amount)
   {
     K2 *max_key = nullptr;
     for (const auto &vec: tc->intermediate_super_vector)
@@ -143,28 +151,29 @@ void *Boss_thread(void *arg)
     }
     if (max_key == nullptr)
       break;
-    K2 *smallest_pair_transfered = nullptr;
+    K2 *previous_key = nullptr;
     for (auto &vec: tc->intermediate_super_vector)
     {
       if (!vec.empty())
       {
         IntermediatePair &last_pair = vec.back();
-        if (!(*last_pair.first < *max_key && *max_key < *last_pair.first))
+        if (!(*last_pair.first < *max_key || *max_key < *last_pair.first))
         {
-          if (smallest_pair_transfered == nullptr || *last_pair.first < *smallest_pair_transfered)
+          if (previous_key == nullptr || *last_pair.first < *previous_key)
           {
             tc->intermediate_shuffled_super_vector.push_back
                 ({last_pair});
-            smallest_pair_transfered = last_pair.first;
+            previous_key = last_pair.first;
             vec.pop_back();
           } else
           {
             tc->intermediate_shuffled_super_vector[tc->intermediate_shuffled_super_vector.size() - 1]
                 .push_back(last_pair);
+            previous_key = last_pair.first;
             vec.pop_back();
           }
           counter++;
-          tc->job_state->percentage = (float)counter / (float)tc->input_vec.size()
+          tc->job_state->percentage = (float)counter / (float)total_amount
                                       * 100;
         }
       }
