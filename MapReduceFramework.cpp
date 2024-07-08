@@ -100,7 +100,7 @@ void* Boss_thread(void* arg){
       tc->barrier->barrier();
 
 
-      MapReduceClient::(tc->input_vec[old_value].first,
+      MapReduceClient::reduce(tc->[old_value].first,
                            tc->input_vec[old_value].second, context);
     }
 
@@ -142,7 +142,7 @@ void* Minion_thread(void* arg)
         tc->barrier->barrier();
 
 
-        MapReduceClient::(tc->input_vec[old_value].first,
+        MapReduceClient::reduce(tc->input_vec[old_value].first,
                           tc->input_vec[old_value].second, context);
     }
 
@@ -190,6 +190,11 @@ void waitForJob(JobHandle job){
     pthread_mutex_unlock(&job_context->job_mutex);
 }
 
-void getJobState(JobHandle job, JobState* state);
+void getJobState(JobHandle job, JobState* state)
+{
+    JobContext* jc = (JobContext*) context;
+    *state = *(jc->job_state);
+}
 
 void closeJobHandle(JobHandle job);
+
