@@ -4,6 +4,18 @@
 #include <pthread.h>
 #include <semaphore.h>
 
+class Barrier {
+ public:
+  Barrier(int numThreads);
+  ~Barrier();
+  void barrier();
+
+ private:
+  pthread_mutex_t mutex;
+  pthread_cond_t cv;
+  int count;
+  int numThreads;
+};
 
 struct ThreadContext{
     MapReduceClient& client;
@@ -13,20 +25,19 @@ struct ThreadContext{
     IntermediateVec intermediate_vec;
     OutputVec& output_vec;
     JobState job_state;
-
 };
 
 
 void emit2 (K2* key, V2* value, void* context){
     ThreadContext *tc = (ThreadContext*) context;
     tc->intermediate_vec.push_back(IntermediatePair(key, value));
-    tc->atomic_counter++;
+    int old_value = (*(tc->atomic_counter))++;
 }
 
 void emit3 (K3* key, V3* value, void* context){
     ThreadContext* tc = (ThreadContext*) context;
     tc->output_vec.emplace_back(key, value);
-    tc->atomic_counter++;
+    int old_value = (*(tc->atomic_counter))++;
 }
 
 void* MapReduce(void* arg){
@@ -45,8 +56,17 @@ JobHandle startMapReduceJob(const MapReduceClient& client, const InputVec& input
     }
 }
 
-void waitForJob(JobHandle job);
+void waitForJob(JobHandle job)
+{
 
-void getJobState(JobHandle job, JobState* state);
+}
 
-void closeJobHandle(JobHandle job);
+void getJobState(JobHandle job, JobState* state)
+{
+    job
+}
+
+void closeJobHandle(JobHandle job)
+{
+
+}
