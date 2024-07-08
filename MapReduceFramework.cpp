@@ -51,6 +51,7 @@ struct JobContext
     bool job_done;
     std::atomic<int> atomic_index;
     std::atomic<int> atomic_index2;
+    int size;
 
     JobContext(const InputVec &inputVec, OutputVec &outputVec, JobState *job_state1, int multiThreadLevel)
         : job_state(job_state1), input_vec(inputVec), output_vec(outputVec), job_done(false), atomic_index(0), atomic_index2(0)
@@ -83,7 +84,11 @@ void emit3(K3 *key, V3 *value, void *context)
 {
   ThreadContext *tc = (ThreadContext *) context;
   pthread_mutex_lock(tc->emit3_lock);
+  printf("inside emit3: %d\n", tc->thread_index);
+  fflush(stdout);
   tc->output_vec.emplace_back(key, value);
+  printf("exit emit3: %d\n", tc->thread_index);
+  fflush(stdout);
   pthread_mutex_unlock(tc->emit3_lock);
 }
 
@@ -124,16 +129,13 @@ void *Boss_thread(void *arg)
   fflush(stdout);
   //finish sorting
   tc->barrier->barrier();
-  long counter = 0;
-
-  //count the number of elements
-  long total_amount = 0;
-  for (const auto &vec: tc->intermediate_super_vector)
-  {
-    total_amount += vec.size();
+  int counter = 0;
+  int size = 0;
+  for (int i = 0; i < tc->intermediate_super_vector.size(); i++){
+    size += tc->intermediate_super_vector[i].size();
   }
-
-  while (counter < total_amount)
+  tc->job_context->size = size;
+  while (counter < size)
   {
     K2 *max_key = nullptr;
     for (const auto &vec: tc->intermediate_super_vector)
@@ -173,7 +175,7 @@ void *Boss_thread(void *arg)
             vec.pop_back();
           }
           counter++;
-          tc->job_state->percentage = (float)counter / (float)total_amount
+          tc->job_state->percentage = (float)counter / (float)size
                                       * 100;
         }
       }
@@ -187,19 +189,19 @@ void *Boss_thread(void *arg)
   while (true)
   {
     int old_value = tc->atomic_index++;
-    if (old_value >= tc->input_vec.size())
+    if (old_value >= size)
       break;
 
     tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
     //updates percentage, no one can touch it in this time
     pthread_mutex_lock(tc->grade_lock);
-    tc->job_state->percentage = ((float) old_value / (float) tc->input_vec.size()) *
-                                100;
+    tc->job_state->percentage = ((float) old_value / (float) size) *100;
     pthread_mutex_unlock(tc->grade_lock);
   }
 
-  //TODO:implement delete
   printf("Boss thread finished\n");
+  tc->barrier->barrier();
+  MemoryFree(tc->job_context);
   return nullptr;
 }
 
@@ -238,20 +240,23 @@ void *Minion_thread(void *arg)
   tc->barrier->barrier();
   //wait for boss to finish shuffling
   tc->barrier->barrier();
+  pthread_mutex_lock(tc->grade_lock);
+  int size = tc->job_context->size;
+  pthread_mutex_unlock(tc->grade_lock);
   while (true)
   {
     int old_value = tc->atomic_index++;
-    if (old_value >= tc->input_vec.size())
+    if (old_value >= size)
       break;
 
     tc->client.reduce(&tc->intermediate_shuffled_super_vector[old_value], arg);
     //updates percentage, no one can touch it in this time
     pthread_mutex_lock(tc->grade_lock);
-    tc->job_state->percentage = ((float) old_value / (float) tc->input_vec.size()) *
-                                100;
+    tc->job_state->percentage = ((float) old_value / (float) size) * 100;
     pthread_mutex_unlock(tc->grade_lock);
   }
   printf("Minion thread %d finished\n", tc->thread_index);
+  tc->barrier->barrier();
   return nullptr;
 }
 
@@ -273,6 +278,7 @@ startMapReduceJob(const MapReduceClient &client, const InputVec &inputVec, Outpu
   pthread_mutex_t *grade_lock = new pthread_mutex_t;
   pthread_mutex_t *emit3_lock = new pthread_mutex_t;
   pthread_mutex_init(grade_lock, NULL);
+  pthread_mutex_init(emit3_lock, NULL);
 
 
   std::vector<IntermediateVec> *inter_vec = new std::vector<IntermediateVec>;
@@ -285,33 +291,33 @@ startMapReduceJob(const MapReduceClient &client, const InputVec &inputVec, Outpu
 
   // Create and start threads
   for (int i = 0; i < multiThreadLevel; ++i)
+  {
+    ThreadContext *thread_context = new ThreadContext(client, job_context->atomic_index, job_context->atomic_index2, inputVec, outputVec,
+                                                      job_state, barrier,
+                                                      i, grade_lock,
+                                                      emit3_lock,
+                                                      *inter_vec,
+                                                      *shuffle_vec, job_context);
+    job_context->thread_contexts.push_back(thread_context);
+    if (i == 0)
     {
-      ThreadContext *thread_context = new ThreadContext(client, job_context->atomic_index, job_context->atomic_index2, inputVec, outputVec,
-                                                        job_state, barrier,
-                                                        i, grade_lock,
-                                                        emit3_lock,
-                                                        *inter_vec,
-                                                        *shuffle_vec, job_context);
-      job_context->thread_contexts.push_back(thread_context);
-      if (i == 0)
-      {
-          if (pthread_create(&thread_context->thread_id, nullptr, Boss_thread,
+      if (pthread_create(&thread_context->thread_id, nullptr, Boss_thread,
                          thread_context) != 0)
-          {
-              fprintf(stderr, "system error: thread creation failed\n");
-              MemoryFree(job_context);
-              exit(1);
-          }
-      } else
       {
-        if (pthread_create(&thread_context->thread_id, nullptr, Minion_thread, thread_context) != 0)
-        {
-          fprintf(stderr, "system error: thread creation failed\n");
-          MemoryFree(job_context);
-          exit(1);
-        }
-
+        fprintf(stderr, "system error: thread creation failed\n");
+        MemoryFree(job_context);
+        exit(1);
       }
+    } else
+    {
+      if (pthread_create(&thread_context->thread_id, nullptr, Minion_thread, thread_context) != 0)
+      {
+        fprintf(stderr, "system error: thread creation failed\n");
+        MemoryFree(job_context);
+        exit(1);
+      }
+
+    }
   }
 
   return static_cast<JobHandle>(job_context);
