@@ -7,6 +7,7 @@
 
 
 struct ThreadContext {
+    JobState* job_state;
     const MapReduceClient& client;
     std::atomic<int>* atomic_index;
     std::atomic<int>* atomic_progress;
@@ -15,27 +16,33 @@ struct ThreadContext {
     IntermediateVec intermediate_vector;
     OutputVec& output_vec;
     Barrier* barrier;
-    ThreadContext(const MapReduceClient& client, std::atomic<int>* index, std::atomic<int>* progress, const InputVec& inputVec, OutputVec& outputVec)
-            : client(client), atomic_index(index), atomic_progress(progress), input_vec(inputVec), output_vec(outputVec) {}
+    ThreadContext(const MapReduceClient& client, std::atomic<int>* index, std::atomic<int>* progress, const InputVec& inputVec, OutputVec& outputVec, JobState* job_state1, Barrier* barrier_1)
+            : job_state(job_state1), client(client), atomic_index(index), atomic_progress(progress), input_vec(inputVec), output_vec(outputVec), barrier(barrier_1) {}
 };
 
 struct JobContext {
-    JobState job_state;
+    JobState* job_state;
     int length;
     const InputVec& input_vec;
     OutputVec& output_vec;
     std::vector<ThreadContext*> thread_contexts;
+    pthread_mutex_t job_mutex;
+    pthread_cond_t job_cv;
+    bool job_done;
 
-    JobContext(const InputVec& inputVec, OutputVec& outputVec)
-            : input_vec(inputVec), output_vec(outputVec) {
-        job_state = {UNDEFINED_STAGE, 0};
+    JobContext(const InputVec& inputVec, OutputVec& outputVec, JobState* job_state1)
+            :job_state(job_state1), input_vec(inputVec), output_vec(outputVec), job_done(false) {
         length = inputVec.size();
+        pthread_mutex_init(&job_mutex, nullptr);
+        pthread_cond_init(&job_cv, nullptr);
     }
 
     ~JobContext() {
         for (auto& tc : thread_contexts) {
             delete tc;
         }
+        pthread_mutex_destroy(&job_mutex);
+        pthread_cond_destroy(&job_cv);
     }
 };
 
@@ -52,19 +59,6 @@ void emit3(K3* key, V3* value, void* context) {
 }
 
 void* Boss_thread(void* arg){
-    ThreadContext* tc = (ThreadContext*) context;
-    while(true)
-    {
-        int old_value = (*(tc->atomic_index))++;
-        if (old_value >= tc->input_vec.size())
-            break;
-
-        MapReduceClient::map(tc->input_vec[old_value].first,
-                             tc->input_vec[old_value].second, context);
-    }
-    // waits for everyone to finish reading before updating the job state
-    tc->barrier->barrier();
-
     return NULL;
 }
 
@@ -77,11 +71,15 @@ JobHandle startMapReduceJob(const MapReduceClient& client, const InputVec& input
     // Create a ThreadContext....
     std::atomic<int>* atomic_index(0);
     std::atomic<int>* atomic_progress(0);
-    JobContext* job_context = new JobContext(inputVec, outputVec);
+    JobState* job_state = new JobState;
+    job_state->percentage = 0;
+    job_state->stage = UNDEFINED_STAGE;
+    Barrier* barrier = new Barrier(multiThreadLevel);
+    JobContext* job_context = new JobContext(inputVec, outputVec, job_state);
 
     // Create and start threads
     for (int i = 0; i < multiThreadLevel; ++i) {
-        ThreadContext* thread_context = new ThreadContext(client, atomic_index, atomic_progress, inputVec, outputVec);
+        ThreadContext* thread_context = new ThreadContext(client, atomic_index, atomic_progress, inputVec, outputVec, job_state, barrier);
         job_context->thread_contexts.push_back(thread_context);
         if (i == 0) {
             pthread_create(&thread_context->thread_id, nullptr, Boss_thread, thread_context);
@@ -93,7 +91,22 @@ JobHandle startMapReduceJob(const MapReduceClient& client, const InputVec& input
     return static_cast<JobHandle>(job_context);
 }
 
-void waitForJob(JobHandle job);
+void waitForJob(JobHandle job){
+    JobContext* job_context = (JobContext*)job;
+    pthread_mutex_lock(&job_context->job_mutex);
+
+    // Wait until the job is done
+    while (!job_context->job_done) {
+        pthread_cond_wait(&job_context->job_cv, &job_context->job_mutex);
+    }
+
+    // Join all threads to ensure they are done
+    for (auto& tc : job_context->thread_contexts) {
+        pthread_join(tc->thread_id, nullptr);
+    }
+
+    pthread_mutex_unlock(&job_context->job_mutex);
+}
 
 void getJobState(JobHandle job, JobState* state);
 
